@@ -1,0 +1,55 @@
+{
+  "title": "Assistente Spesa - HA",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Assistente Spesa - HA",
+        "description": "Aggiunge la lista della spesa condivisa per l'app Assistente Spesa. Dopo, in Configura, assegna i ruoli Adulto e Junior."
+      }
+    },
+    "abort": {
+      "already_configured": "Assistente Spesa è già configurato."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Assistente Spesa",
+        "menu_options": {
+          "roles": "Ruoli (Adulto / Junior)",
+          "push": "Notifiche push (Firebase)",
+          "firefly": "Collegamento con Firefly III"
+        }
+      },
+      "roles": {
+        "title": "Ruoli",
+        "description": "Adulto: aggiunge, insiste, fa la spesa, vede i costi e i tasti nascosti. Junior: aggiunge e insiste, non vede i prodotti \"Solo adulti\". Nessuno: non entra nell'app."
+      },
+      "juniors": {
+        "title": "Costi dei Junior",
+        "description": "I prodotti \"Solo per me\" di ogni Junior vanno all'Adulto scelto qui."
+      },
+      "push": {
+        "title": "Notifiche push",
+        "description": "Incolla il file JSON della chiave del service account del progetto Firebase (Impostazioni progetto → Account di servizio → Genera nuova chiave privata). Lascia vuoto per spegnere le push.",
+        "data": {
+          "service_account": "Chiave del service account (JSON)"
+        }
+      },
+      "firefly": {
+        "title": "Firefly III",
+        "description": "Indirizzo e token personale di Firefly III, e l'ID del conto da cui escono le spese. Lascia vuoto per scollegare.",
+        "data": {
+          "url": "Indirizzo di Firefly III",
+          "token": "Token di accesso personale",
+          "account_id": "ID del conto di uscita"
+        }
+      }
+    },
+    "error": {
+      "invalid_service_account": "Il JSON non è una chiave di service account valida (servono project_id, client_email e private_key).",
+      "firefly_cannot_connect": "Firefly III non risponde con questo indirizzo e token."
+    }
+  },
+  "entity": {}
+}

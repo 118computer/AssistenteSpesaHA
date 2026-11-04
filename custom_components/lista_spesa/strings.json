@@ -1,0 +1,55 @@
+{
+  "title": "Grocery Assistant - HA",
+  "config": {
+    "step": {
+      "user": {
+        "title": "Grocery Assistant - HA",
+        "description": "Adds the shared shopping list for the Grocery Assistant app. Then open Configure to assign Adult and Junior roles."
+      }
+    },
+    "abort": {
+      "already_configured": "Grocery Assistant is already configured."
+    }
+  },
+  "options": {
+    "step": {
+      "init": {
+        "title": "Grocery Assistant",
+        "menu_options": {
+          "roles": "Roles (Adult / Junior)",
+          "push": "Push notifications (Firebase)",
+          "firefly": "Firefly III link"
+        }
+      },
+      "roles": {
+        "title": "Roles",
+        "description": "Adult: adds, insists, shops, sees costs and hidden buttons. Junior: adds and insists, does not see \"Adults only\" items. None: cannot use the app."
+      },
+      "juniors": {
+        "title": "Junior costs",
+        "description": "Each Junior's \"Just for me\" items are charged to the Adult chosen here."
+      },
+      "push": {
+        "title": "Push notifications",
+        "description": "Paste the JSON key of the Firebase project's service account. Leave empty to turn push off.",
+        "data": {
+          "service_account": "Service account key (JSON)"
+        }
+      },
+      "firefly": {
+        "title": "Firefly III",
+        "description": "Firefly III address, personal access token and the ID of the source account. Leave empty to unlink.",
+        "data": {
+          "url": "Firefly III address",
+          "token": "Personal access token",
+          "account_id": "Source account ID"
+        }
+      }
+    },
+    "error": {
+      "invalid_service_account": "Not a valid service account key (project_id, client_email and private_key are required).",
+      "firefly_cannot_connect": "Firefly III does not answer with this address and token."
+    }
+  },
+  "entity": {}
+}

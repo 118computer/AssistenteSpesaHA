@@ -1,0 +1,26 @@
+name: Release
+
+# La Release nasce solo se i controlli passano: HACS la mostra come nuova versione.
+on:
+  push:
+    tags: ["v*"]
+
+permissions: {}
+
+jobs:
+  controlli:
+    permissions:
+      contents: read
+    uses: ./.github/workflows/validate.yml
+
+  release:
+    name: Crea la Release
+    needs: controlli
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - env:
+          GH_TOKEN: ${{ github.token }}
+          GH_REPO: ${{ github.repository }}
+        run: gh release create "$GITHUB_REF_NAME" --title "$GITHUB_REF_NAME" --notes "Assistente Spesa - HA $GITHUB_REF_NAME"
