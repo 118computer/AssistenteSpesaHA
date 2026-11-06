@@ -14,9 +14,10 @@ from homeassistant.helpers.dispatcher import async_dispatcher_send
 from homeassistant.helpers.storage import Store
 from homeassistant.util import dt as dt_util
 
-from . import logic
+from . import logic, texts
 from .const import (
     CATALOG_MAX,
+    DEFAULT_LANGUAGE,
     DND_NO_SESSION_HOURS,
     DND_SESSION_HOURS,
     MAX_INSIST,
@@ -171,11 +172,11 @@ class ListaSpesaManager:
     def adult_ids(self) -> list[str]:
         return [u["id"] for u in self.active_users() if u["role"] == ROLE_ADULT]
 
-    def name_of(self, user_id: str | None) -> str:
+    def name_of(self, user_id: str | None, lang: str = DEFAULT_LANGUAGE) -> str:
         for user in self.active_users():
             if user["id"] == user_id:
                 return user["name"]
-        return "Qualcuno"
+        return texts.t(lang, "someone")
 
     def require_user(self, user_id: str | None) -> str:
         role = self.role_of(user_id)
@@ -196,6 +197,11 @@ class ListaSpesaManager:
             "added_during_shopping": prefs.get("added_during_shopping", True),
             "firefly_always": prefs.get("firefly_always", False),
         }
+
+    def language_of(self, user_id: str | None) -> str:
+        """Lingua delle notifiche per l'utente (prefs.language), italiano se non l'ha mai mandata."""
+        stored = self.data["prefs"].get(user_id or "", {}).get("language")
+        return texts.normalize_language(stored) or DEFAULT_LANGUAGE
 
     def dnd_until(self, user_id: str) -> str | None:
         until = self.data["dnd"].get(user_id)
@@ -305,20 +311,30 @@ class ListaSpesaManager:
         self,
         to_id: str,
         kind: str,
-        text: str,
         *,
+        args: dict[str, Any] | None = None,
+        text_key: str | None = None,
+        title_key: str = "app_title",
         from_id: str | None = None,
         item: dict | None = None,
         insistence: dict | None = None,
         session: dict | None = None,
         expense_id: str | None = None,
-        title: str | None = None,
     ) -> None:
+        """Avvisa to_id (notice WebSocket + push), con testo e titolo nella sua lingua.
+
+        Testo = texts[text_key, o kind se manca], titolo = texts[title_key]. Segnaposto: {name} è il nome
+        di from_id (o "Qualcuno" nella lingua di to_id), gli altri arrivano da args.
+        """
         if not to_id or self.role_of(to_id) == ROLE_NONE:
             return
         role = self.role_of(to_id)
         if item is not None and role == ROLE_JUNIOR and item.get("visibility") == "adults":
             return
+        lang = self.language_of(to_id)
+        values = {"name": self.name_of(from_id, lang), **(args or {})}
+        text = texts.t(lang, text_key or kind, **values)
+        title = texts.t(lang, title_key, **values)
         notice = {
             "id": _new_id(),
             "kind": kind,
@@ -351,7 +367,7 @@ class ListaSpesaManager:
                 self.hass.async_create_task(
                     self.push.async_send(
                         tokens,
-                        title or "Assistente Spesa",
+                        title,
                         text,
                         data,
                         channel="insistenze" if kind == "insist" else "lista",
@@ -406,7 +422,7 @@ class ListaSpesaManager:
         name = (params.get("name") or "").strip()
         if not name:
             raise ListaError("invalid", "Scrivi il nome del prodotto.")
-        item_id = params.get("id") or _new_id()
+        item_id = params.get("item_id") or _new_id()
         if item_id in self.data["items"]:
             return {"item": self.data["items"][item_id]}
         now = _now()
@@ -443,13 +459,7 @@ class ListaSpesaManager:
                 continue
             prefs_cache[shopper] = self.prefs_of(shopper)
             if prefs_cache[shopper]["added_during_shopping"]:
-                self.notify(
-                    shopper,
-                    "item_added",
-                    f"{self.name_of(user_id)} ha aggiunto {name}",
-                    from_id=user_id,
-                    item=item,
-                )
+                self.notify(shopper, "item_added", args={"item": name}, from_id=user_id, item=item)
         self._changed()
         return {"item": item}
 
@@ -486,13 +496,7 @@ class ListaSpesaManager:
         item.update(status="removed", removed_by=user_id, removed_at=_now(), removed_reason="removed", taken=0)
         self._touch(item, user_id)
         if item["added_by"] != user_id:
-            self.notify(
-                item["added_by"],
-                "item_removed",
-                f"{self.name_of(user_id)} ha tolto {item['name']} dalla lista",
-                from_id=user_id,
-                item=item,
-            )
+            self.notify(item["added_by"], "item_removed", args={"item": item["name"]}, from_id=user_id, item=item)
         self._changed()
         return {"item": item}
 
@@ -545,13 +549,7 @@ class ListaSpesaManager:
         for user in self.active_users():
             if user["id"] == user_id or not self.prefs_of(user["id"])["shopping_started"]:
                 continue
-            self.notify(
-                user["id"],
-                "shopping_started",
-                f"{self.name_of(user_id)} ha iniziato la spesa · {store['name']}",
-                from_id=user_id,
-                session=public,
-            )
+            self.notify(user["id"], "shopping_started", args={"store": store["name"]}, from_id=user_id, session=public)
         self._changed()
         return {"session": public, "store": store}
 
@@ -592,13 +590,7 @@ class ListaSpesaManager:
         item.update(status="not_found", taken=0, shopper_id=user_id, session_id=session["id"])
         self._touch(item, user_id)
         if item["added_by"] != user_id:
-            self.notify(
-                item["added_by"],
-                "item_not_found",
-                f"{self.name_of(user_id)} non ha trovato {item['name']}",
-                from_id=user_id,
-                item=item,
-            )
+            self.notify(item["added_by"], "item_not_found", args={"item": item["name"]}, from_id=user_id, item=item)
         return item
 
     def _apply_reject(self, user_id: str, session: dict[str, Any], item_id: str) -> dict[str, Any]:
@@ -614,13 +606,7 @@ class ListaSpesaManager:
         )
         self._touch(item, user_id)
         if item["added_by"] != user_id:
-            self.notify(
-                item["added_by"],
-                "item_rejected",
-                f"{self.name_of(user_id)} non prende {item['name']}",
-                from_id=user_id,
-                item=item,
-            )
+            self.notify(item["added_by"], "item_rejected", args={"item": item["name"]}, from_id=user_id, item=item)
         return item
 
     def _apply_reopen(self, user_id: str, item_id: str) -> dict[str, Any]:
@@ -686,15 +672,14 @@ class ListaSpesaManager:
 
     def _send_insist(self, ins: dict[str, Any]) -> None:
         item = self.data["items"].get(ins["item_id"])
-        from_name = self.name_of(ins["from_id"])
         self.notify(
             ins["to_id"],
             "insist",
-            f"{from_name} insiste per {ins['item_name']}",
+            args={"item": ins["item_name"]},
+            title_key="insist_title",
             from_id=ins["from_id"],
             item=item,
             insistence=ins,
-            title=f"{from_name} insiste!",
         )
 
     # ------------------------------------------------------------------ insistenze
@@ -753,9 +738,15 @@ class ListaSpesaManager:
         if accept and item is not None:
             self._reset_open(item)
             self._touch(item, user_id)
-        name = self.name_of(user_id)
-        text = f"{name} prende {ins['item_name']}" if accept else f"{name}: NO E BASTA per {ins['item_name']}"
-        self.notify(ins["from_id"], "insist_answer", text, from_id=user_id, item=item, insistence=ins)
+        self.notify(
+            ins["from_id"],
+            "insist_answer",
+            args={"item": ins["item_name"]},
+            text_key="insist_accepted" if accept else "insist_refused",
+            from_id=user_id,
+            item=item,
+            insistence=ins,
+        )
         self._changed()
         return {"insistence": ins}
 
@@ -873,9 +864,14 @@ class ListaSpesaManager:
         if want_ff and self.firefly_enabled and self.firefly is not None:
             self.hass.async_create_task(self._async_firefly_create(expense["id"]))
 
-        text = f"Spesa finita · {expense['store_name']}: abbina lo scontrino quando vuoi"
         for adult in self.adult_ids():
-            self.notify(adult, "shopping_ended", text, from_id=user_id, expense_id=expense["id"])
+            self.notify(
+                adult,
+                "shopping_ended",
+                args={"store": expense["store_name"]},
+                from_id=user_id,
+                expense_id=expense["id"],
+            )
         self._changed()
         return {"expense": expense}
 
@@ -883,8 +879,8 @@ class ListaSpesaManager:
 
     def store_save(self, user_id: str, params: dict[str, Any]) -> dict[str, Any]:
         self.require_adult(user_id)
-        if params.get("id"):
-            store = self.data["stores"].get(params["id"])
+        if params.get("store_id"):
+            store = self.data["stores"].get(params["store_id"])
             if store is None:
                 raise ListaError("not_found", "Supermercato non trovato.")
             if params.get("name"):
@@ -902,8 +898,8 @@ class ListaSpesaManager:
 
     def store_delete(self, user_id: str, params: dict[str, Any]) -> None:
         self.require_adult(user_id)
-        self.data["stores"].pop(params.get("id", ""), None)
-        self.data["receipt_maps"].pop(params.get("id", ""), None)
+        self.data["stores"].pop(params.get("store_id", ""), None)
+        self.data["receipt_maps"].pop(params.get("store_id", ""), None)
         self._changed()
 
     # ------------------------------------------------------------------ storico e scontrino
@@ -1066,12 +1062,25 @@ class ListaSpesaManager:
         self._save()
 
     def set_prefs(self, user_id: str, params: dict[str, Any]) -> dict[str, Any]:
+        """Cambia solo i campi presenti. La lingua non è nello stato: se cambia solo lei si salva e basta."""
         self.require_user(user_id)
-        prefs = self.data["prefs"].setdefault(user_id, {})
+        current = self.prefs_of(user_id)
+        changes: dict[str, Any] = {}
         for key in ("shopping_started", "added_during_shopping", "firefly_always"):
-            if key in params and params[key] is not None:
-                prefs[key] = bool(params[key])
-        self._changed()
+            if params.get(key) is not None and bool(params[key]) != current[key]:
+                changes[key] = bool(params[key])
+        if params.get("language") is not None:
+            language = texts.normalize_language(params["language"])
+            if language is None:
+                _LOGGER.debug("Lingua ignorata: %r", params["language"])
+            elif language != self.data["prefs"].get(user_id, {}).get("language"):
+                changes["language"] = language
+        if changes:
+            self.data["prefs"].setdefault(user_id, {}).update(changes)
+            if changes.keys() - {"language"}:
+                self._changed()  # cambia "me" nello stato degli iscritti
+            else:
+                self._save()
         return {"me": self.me_of(user_id)}
 
     # ------------------------------------------------------------------ Firefly III

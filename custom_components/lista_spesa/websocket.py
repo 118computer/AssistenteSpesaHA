@@ -38,9 +38,11 @@ _ITEM_ID = {vol.Required("item_id"): str}
 _IN_SESSION = {vol.Required("item_id"): str, vol.Optional("session_id"): _OPT_STR}
 
 # nome comando → (campi, metodo del manager)
+# Mai un campo "id" negli schemi: HA lo usa per il numero del messaggio e lo sostituisce
+# (BASE_COMMAND_MESSAGE_SCHEMA.extend). Si usano item_id, store_id, ecc. (tests/test_websocket_schema.py)
 COMMANDS: dict[str, tuple[dict, str]] = {
     "state": ({}, "snapshot_cmd"),
-    "add": ({vol.Required("name"): str, vol.Optional("id"): _OPT_STR, **{k: v for k, v in _ITEM_FIELDS.items() if k != "name"}}, "add"),
+    "add": ({vol.Required("name"): str, vol.Optional("item_id"): _OPT_STR, **{k: v for k, v in _ITEM_FIELDS.items() if k != "name"}}, "add"),
     "update": ({**_ITEM_ID, **_ITEM_FIELDS}, "update"),
     "remove": (_ITEM_ID, "remove"),
     "restore": (_ITEM_ID, "restore"),
@@ -84,14 +86,14 @@ COMMANDS: dict[str, tuple[dict, str]] = {
     "insist_answer": ({vol.Required("insistence_id"): str, vol.Required("accept"): bool}, "insist_answer"),
     "store_save": (
         {
-            vol.Optional("id"): _OPT_STR,
+            vol.Optional("store_id"): _OPT_STR,
             vol.Optional("name"): _OPT_STR,
             vol.Optional("lat"): _OPT_FLOAT,
             vol.Optional("lon"): _OPT_FLOAT,
         },
         "store_save",
     ),
-    "store_delete": ({vol.Required("id"): str}, "store_delete"),
+    "store_delete": ({vol.Required("store_id"): str}, "store_delete"),
     "history": ({vol.Optional("limit"): _OPT_INT}, "history"),
     "expense": ({vol.Required("expense_id"): str}, "expense"),
     "receipt_match": ({vol.Required("expense_id"): str, vol.Required("lines"): [dict]}, "receipt_match"),
@@ -115,6 +117,7 @@ COMMANDS: dict[str, tuple[dict, str]] = {
             vol.Optional("shopping_started"): _OPT_BOOL,
             vol.Optional("added_during_shopping"): _OPT_BOOL,
             vol.Optional("firefly_always"): _OPT_BOOL,
+            vol.Optional("language"): _OPT_STR,  # ISO 639-1, normalizzato dal manager; codici sconosciuti accettati
         },
         "set_prefs",
     ),

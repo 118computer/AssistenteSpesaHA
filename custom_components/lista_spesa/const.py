@@ -20,4 +20,7 @@ DND_NO_SESSION_HOURS = 2
 DND_SESSION_HOURS = 12
 STATE_DEBOUNCE = 0.1
 
+# Lingua delle notifiche per chi non l'ha mai mandata con prefs: le installazioni esistenti sono italiane.
+DEFAULT_LANGUAGE = "it"
+
 SIGNAL_UPDATED = "lista_spesa_updated"
