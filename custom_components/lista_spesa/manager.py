@@ -21,6 +21,7 @@ from .const import (
     DND_NO_SESSION_HOURS,
     DND_SESSION_HOURS,
     MAX_INSIST,
+    MAX_TAKEN,
     OPT_FCM,
     OPT_FIREFLY,
     OPT_JUNIOR_ADULT,
@@ -114,6 +115,10 @@ class ListaSpesaManager:
             base = _empty_data()
             base.update(stored)
             self.data = base
+            # prodotti salvati prima del cambio quantità tracciato: campi a null
+            for item in self.data["items"].values():
+                for key in ("quantity_by", "quantity_at", "quantity_from"):
+                    item.setdefault(key, None)
         await self.async_refresh_users()
 
     def _save(self) -> None:
@@ -412,6 +417,29 @@ class ListaSpesaManager:
             keep = sorted(self.data["catalog"].values(), key=lambda c: -c["count"])[:CATALOG_MAX]
             self.data["catalog"] = {c["key"]: c for c in keep}
 
+    def _unbump_catalog(self, item: dict[str, Any]) -> None:
+        """Un uso in meno nel catalogo; a zero usi la voce sparisce."""
+        key = item.get("key") or logic.normalize_key(item.get("name", ""))
+        entry = self.data["catalog"].get(key)
+        if entry is None:
+            return
+        if int(entry.get("count", 0)) <= 1:
+            self.data["catalog"].pop(key, None)
+        else:
+            entry["count"] = int(entry["count"]) - 1
+
+    @staticmethod
+    def _track_quantity(item: dict[str, Any], user_id: str, old: int, new: int) -> None:
+        """Chi ha cambiato la quantità, quando e da quale: più cambi di fila della stessa persona contano come uno."""
+        start = item.get("quantity_from")
+        if item.get("quantity_by") != user_id or start is None:
+            start = old
+        if new == start:
+            # tornata dov'era: nessun cambio da mostrare
+            item.update(quantity_by=None, quantity_at=None, quantity_from=None)
+        else:
+            item.update(quantity_by=user_id, quantity_at=_now(), quantity_from=start)
+
     def _shoppers(self) -> list[str]:
         return [s["user_id"] for s in self.data["sessions"].values()]
 
@@ -431,6 +459,9 @@ class ListaSpesaManager:
             "name": name,
             "key": logic.normalize_key(name),
             "quantity": max(1, int(params.get("quantity") or 1)),
+            "quantity_by": None,
+            "quantity_at": None,
+            "quantity_from": None,
             "message": params.get("message") or "",
             "message_level": params.get("message_level") or "info",
             "for_whom": params.get("for_whom") or "all",
@@ -479,6 +510,9 @@ class ListaSpesaManager:
                 value = max(1, int(value or 1))
                 if item.get("taken", 0) > value:
                     item["taken"] = value
+                old = int(item.get("quantity", 1))
+                if value != old:
+                    self._track_quantity(item, user_id, old, value)
             elif field == "visibility" and role == ROLE_JUNIOR:
                 continue
             elif field == "urgent":
@@ -507,6 +541,21 @@ class ListaSpesaManager:
         self._touch(item, user_id)
         self._changed()
         return {"item": item}
+
+    def delete(self, user_id: str, params: dict[str, Any]) -> None:
+        """Elimina per sempre un prodotto tolto: solo chi l'ha aggiunto."""
+        self.require_user(user_id)
+        item = self._item(params["item_id"])
+        if item["added_by"] != user_id:
+            raise ListaError("not_allowed", "Puoi eliminare solo i prodotti che hai aggiunto tu.")
+        if item.get("status") != "removed":
+            raise ListaError("invalid", "Si possono eliminare solo i prodotti tolti.")
+        self.data["items"].pop(item["id"], None)
+        self._unbump_catalog(item)
+        self.data["insistences"] = {
+            k: ins for k, ins in self.data["insistences"].items() if ins.get("item_id") != item["id"]
+        }
+        self._changed()
 
     # ------------------------------------------------------------------ spesa
 
@@ -566,7 +615,8 @@ class ListaSpesaManager:
     def _apply_check(self, user_id: str, session: dict[str, Any], params: dict[str, Any]) -> dict[str, Any]:
         item = self._item(params["item_id"])
         quantity = int(item.get("quantity", 1))
-        taken = max(0, min(int(params.get("taken", 0)), quantity))
+        # si possono prendere più pezzi di quelli richiesti: quantity resta la richiesta
+        taken = max(0, min(int(params.get("taken", 0)), MAX_TAKEN))
         close = bool(params.get("close", False))
         if close and taken == 0:
             taken = quantity
@@ -812,9 +862,9 @@ class ListaSpesaManager:
         ]
         receipt_total = params.get("receipt_total_cents")
         payer_id = params.get("payer_id") or user_id
-        split = logic.split_costs(lines, receipt_total, payer_id, self.adult_ids(), self.junior_adult)
-        for line, who in zip(lines, split["charged_to"]):
-            line["charged_to"] = who
+        split = logic.split_costs(lines, receipt_total, payer_id, self.adult_ids(), self.junior_adult, buyer_id=user_id)
+        for line, who, extra_to, extra in zip(lines, split["charged_to"], split["extra_to"], split["extra_cents"]):
+            line.update(charged_to=who, extra_to=extra_to, extra_cents=extra)
         expense = {
             "id": _new_id(),
             "session_id": sid,
@@ -875,6 +925,29 @@ class ListaSpesaManager:
         self._changed()
         return {"expense": expense}
 
+    def cancel_shopping(self, user_id: str, params: dict[str, Any]) -> None:
+        """Annulla la spesa (un'emergenza): come se non fosse mai iniziata. Niente storico, corsie, Firefly, avvisi."""
+        self.require_adult(user_id)
+        session = self._session(params.get("session_id"))
+        if session["user_id"] != user_id:
+            raise ListaError("not_allowed", "Solo chi fa la spesa può annullarla.")
+        sid = session["id"]
+        for item in self.data["items"].values():
+            if item.get("session_id") != sid:
+                continue
+            status = item["status"]
+            if status in ("taken", "not_found") or (status == "open" and int(item.get("taken", 0)) > 0):
+                # presi, presi in parte, non trovati: di nuovo da comprare (not_found_last invariato)
+                self._apply_reopen(user_id, item["id"])
+            else:
+                # i "non lo prendo" restano tolti: chi l'aveva chiesto è già stato avvisato
+                item["session_id"] = None
+            item["insist_count"] = 0
+        self.data["sessions"].pop(sid, None)
+        self.data["dnd"].pop(user_id, None)
+        self._changed()
+        return None
+
     # ------------------------------------------------------------------ supermercati
 
     def store_save(self, user_id: str, params: dict[str, Any]) -> dict[str, Any]:
@@ -885,6 +958,10 @@ class ListaSpesaManager:
                 raise ListaError("not_found", "Supermercato non trovato.")
             if params.get("name"):
                 store["name"] = params["name"].strip()
+                # le spese in corso lì hanno copiato il nome alla partenza: seguono quello nuovo
+                for session in self.data["sessions"].values():
+                    if session.get("store_id") == store["id"]:
+                        session["store_name"] = store["name"]
             if params.get("lat") is not None:
                 store["lat"] = float(params["lat"])
             if params.get("lon") is not None:
@@ -952,9 +1029,11 @@ class ListaSpesaManager:
         total = exp.get("receipt_total_cents")
         if total is None:
             total = lines_total
-        split = logic.split_costs(exp["lines"], total, exp["payer_id"], self.adult_ids(), self.junior_adult)
-        for line, who in zip(exp["lines"], split["charged_to"]):
-            line["charged_to"] = who
+        split = logic.split_costs(
+            exp["lines"], total, exp["payer_id"], self.adult_ids(), self.junior_adult, buyer_id=exp.get("shopper_id")
+        )
+        for line, who, extra_to, extra in zip(exp["lines"], split["charged_to"], split["extra_to"], split["extra_cents"]):
+            line.update(charged_to=who, extra_to=extra_to, extra_cents=extra)
         exp["marked_total_cents"] = split["marked_total_cents"]
         exp["total_cents"] = split["total_cents"]
         exp["shares"] = split["shares"]

@@ -77,14 +77,29 @@ def charged_to(line: dict[str, Any], junior_to_adult: dict[str, str], adult_ids:
     return None
 
 
+def extra_cents(line: dict[str, Any]) -> int:
+    """Parte del prezzo di una riga per i pezzi presi oltre i richiesti, arrotondata al centesimo."""
+    price = line.get("price_cents")
+    quantity = max(1, int(line.get("quantity") or 1))
+    taken = int(line.get("taken") or quantity)
+    if price is None or taken <= quantity:
+        return 0
+    return (int(price) * (taken - quantity) * 2 + taken) // (2 * taken)
+
+
 def split_costs(
     lines: list[dict[str, Any]],
     receipt_total_cents: int | None,
     payer_id: str,
     adult_ids: list[str],
     junior_to_adult: dict[str, str] | None = None,
+    buyer_id: str | None = None,
 ) -> dict[str, Any]:
-    """Regola di divisione (docs/PROTOCOLLO.md). Restituisce totale, charged_to per riga e quote."""
+    """Regola di divisione (docs/PROTOCOLLO.md). Restituisce totale, charged_to per riga e quote.
+
+    [buyer_id] = chi ha fatto la spesa: si prende la parte dei pezzi presi oltre i richiesti
+    (extra_to / extra_cents per riga).
+    """
     junior_to_adult = junior_to_adult or {}
     adults = sorted(set(adult_ids))
     marked = sum(int(l["price_cents"]) for l in lines if l.get("price_cents") is not None)
@@ -92,10 +107,19 @@ def split_costs(
     charged = [charged_to(l, junior_to_adult, adults) for l in lines]
     own: dict[str, int] = {a: 0 for a in adults}
     own_items: dict[str, list[dict[str, Any]]] = {a: [] for a in adults}
+    extra_to: list[str | None] = []
+    extra: list[int] = []
     for line, who in zip(lines, charged):
+        cents = extra_cents(line) if buyer_id in adults else 0
+        extra.append(cents)
+        extra_to.append(buyer_id if cents else None)
+        if cents:
+            pieces = int(line.get("taken")) - max(1, int(line.get("quantity") or 1))
+            own[buyer_id] += cents
+            own_items[buyer_id].append({"name": f"{line.get('name', '')} +{pieces}", "price_cents": cents})
         if who is not None:
-            own[who] += int(line["price_cents"])
-            own_items[who].append({"name": line.get("name", ""), "price_cents": int(line["price_cents"])})
+            own[who] += int(line["price_cents"]) - cents
+            own_items[who].append({"name": line.get("name", ""), "price_cents": int(line["price_cents"]) - cents})
     common = total - sum(own.values())
     shares: list[dict[str, Any]] = []
     if adults:
@@ -114,7 +138,14 @@ def split_costs(
                     "own_items": own_items[a],
                 }
             )
-    return {"total_cents": total, "marked_total_cents": marked, "charged_to": charged, "shares": shares}
+    return {
+        "total_cents": total,
+        "marked_total_cents": marked,
+        "charged_to": charged,
+        "extra_to": extra_to,
+        "extra_cents": extra,
+        "shares": shares,
+    }
 
 
 def update_aisle(aisle: dict[str, float], ordered_keys: list[str], weight: float = 0.5) -> dict[str, float]:

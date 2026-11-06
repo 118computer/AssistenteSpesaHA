@@ -16,6 +16,8 @@ OPT_FIREFLY = "firefly"
 
 MAX_INSIST = 2
 CATALOG_MAX = 300
+# Pezzi presi in una spesa: anche più di quelli richiesti, fino a questo tetto.
+MAX_TAKEN = 999
 DND_NO_SESSION_HOURS = 2
 DND_SESSION_HOURS = 12
 STATE_DEBOUNCE = 0.1

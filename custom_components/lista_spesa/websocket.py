@@ -46,6 +46,7 @@ COMMANDS: dict[str, tuple[dict, str]] = {
     "update": ({**_ITEM_ID, **_ITEM_FIELDS}, "update"),
     "remove": (_ITEM_ID, "remove"),
     "restore": (_ITEM_ID, "restore"),
+    "delete": (_ITEM_ID, "delete"),
     "start_shopping": (
         {
             vol.Optional("store_id"): _OPT_STR,
@@ -81,6 +82,7 @@ COMMANDS: dict[str, tuple[dict, str]] = {
         },
         "end_shopping",
     ),
+    "cancel_shopping": ({vol.Required("session_id"): str}, "cancel_shopping"),
     "do_not_disturb": ({vol.Required("enabled"): bool}, "do_not_disturb"),
     "insist": (_ITEM_ID, "insist"),
     "insist_answer": ({vol.Required("insistence_id"): str, vol.Required("accept"): bool}, "insist_answer"),
